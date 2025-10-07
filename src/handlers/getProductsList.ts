@@ -19,7 +19,9 @@ export const handler: APIGatewayProxyHandlerV2 = async () => {
 
     if (products.length === 0) {
       console.warn('No products found in table', PRODUCTS_TABLE);
-      return ok([]);
+      const response = ok([]);
+      console.log('RESPONSE', JSON.stringify(response));
+      return response;
     }
 
     const keys = products.map(p => ({ product_id: p.id }));
@@ -45,12 +47,18 @@ export const handler: APIGatewayProxyHandlerV2 = async () => {
     }));
 
     console.log('Joined products with stock:', JSON.stringify(joined));
-    return ok(joined);
+    const response = ok(joined);
+    console.log('RESPONSE', JSON.stringify(response));
+    return response;
   } catch (e) {
     console.error('Error in getProductsList:', e);
+    let response;
     if (e instanceof Error) {
-      return internalError(500, e.message + (e.stack ? '\n' + e.stack : ''));
+      response = internalError(500, e.message + (e.stack ? '\n' + e.stack : ''));
+    } else {
+      response = internalError(500, 'Internal Server Error');
     }
-    return internalError(500, 'Internal Server Error');
+    console.log('RESPONSE', JSON.stringify(response));
+    return response;
   }
 };

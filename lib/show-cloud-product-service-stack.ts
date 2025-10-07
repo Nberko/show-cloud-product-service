@@ -79,7 +79,56 @@ export class ShowCloudProductServiceStack extends cdk.Stack {
     });
 
     const productsResource = api.root.addResource('products');
-    productsResource.addMethod('GET', new apigw.LambdaIntegration(getProductsList));
+    productsResource.addMethod('GET', new apigw.LambdaIntegration(getProductsList, {
+      proxy: false,
+      integrationResponses: [
+        {
+          statusCode: '200',
+          responseParameters: {
+            'method.response.header.Access-Control-Allow-Origin': "'*'",
+            'method.response.header.Access-Control-Allow-Headers': "'Content-Type'"
+          }
+        },
+        {
+          statusCode: '400',
+          responseParameters: {
+            'method.response.header.Access-Control-Allow-Origin': "'*'",
+            'method.response.header.Access-Control-Allow-Headers': "'Content-Type'"
+          }
+        },
+        {
+          statusCode: '500',
+          responseParameters: {
+            'method.response.header.Access-Control-Allow-Origin': "'*'",
+            'method.response.header.Access-Control-Allow-Headers': "'Content-Type'"
+          }
+        }
+      ]
+    }), {
+      methodResponses: [
+        {
+          statusCode: '200',
+          responseParameters: {
+            'method.response.header.Access-Control-Allow-Origin': true,
+            'method.response.header.Access-Control-Allow-Headers': true
+          }
+        },
+        {
+          statusCode: '400',
+          responseParameters: {
+            'method.response.header.Access-Control-Allow-Origin': true,
+            'method.response.header.Access-Control-Allow-Headers': true
+          }
+        },
+        {
+          statusCode: '500',
+          responseParameters: {
+            'method.response.header.Access-Control-Allow-Origin': true,
+            'method.response.header.Access-Control-Allow-Headers': true
+          }
+        }
+      ]
+    });
     productsResource.addMethod('POST', new apigw.LambdaIntegration(createProduct));
 
     const productById = productsResource.addResource('{productId}');
