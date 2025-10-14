@@ -1,48 +1,48 @@
-import { S3Client, GetObjectCommand, CopyObjectCommand, DeleteObjectCommand } from "@aws-sdk/client-s3";
-import csv from "csv-parser";
+import { S3Event } from 'aws-lambda';
+import { S3Client, GetObjectCommand, CopyObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
+import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';
+import { Readable } from 'stream';
+import csv from 'csv-parser';
 
-const s3 = new S3Client({ region: process.env.AWS_REGION });
+const s3 = new S3Client({});
+const sqs = new SQSClient({});
 const BUCKET_NAME = process.env.BUCKET_NAME!;
+const QUEUE_URL = process.env.QUEUE_URL!;
 
-function parseCsv(stream: NodeJS.ReadableStream): Promise<Record<string, string>[]> {
-  return new Promise((resolve, reject) => {
-    const rows: Record<string, string>[] = [];
-    stream
-      .pipe(csv())
-      .on("data", (data) => {
-        console.log("CSV row:", data);
-        rows.push(data);
-      })
-      .on("end", () => resolve(rows))
-      .on("error", reject);
-  });
-}
+export const handler = async (event: S3Event) => {
+  for (const rec of event.Records) {
+    const key = decodeURIComponent(rec.s3.object.key);
+    console.info('Processing key:', key);
 
-export const handler = async (event: any) => {
-  console.log("S3 Event:", JSON.stringify(event));
-
-  for (const record of event.Records ?? []) {
-    const key: string = decodeURIComponent(record.s3.object.key.replace(/\+/g, " "));
-    console.log("Processing key:", key);
-
-    // 1) Считать файл из S3 и распарсить CSV
-    const getRes = await s3.send(new GetObjectCommand({ Bucket: BUCKET_NAME, Key: key }));
-    if (!getRes.Body) {
-      console.warn("No Body in S3 object:", key);
-      continue;
-    }
-    await parseCsv(getRes.Body as NodeJS.ReadableStream);
-
-    const destKey = key.replace(/^uploaded\//, "parsed/");
-    await s3.send(new CopyObjectCommand({
+    const { Body } = await s3.send(new GetObjectCommand({
       Bucket: BUCKET_NAME,
-      CopySource: `${BUCKET_NAME}/${key}`,
-      Key: destKey,
+      Key: key,
     }));
+
+    const rows: any[] = [];
+    await new Promise<void>((resolve, reject) => {
+      (Body as Readable)
+        .pipe(csv({ headers: ['title','description','price','count'], skipLines: 1 }))
+        .on('data', (row) => rows.push(row))
+        .on('end', resolve)
+        .on('error', reject);
+    });
+
+    for (const r of rows) {
+      await sqs.send(new SendMessageCommand({
+        QueueUrl: QUEUE_URL,
+        MessageBody: JSON.stringify({
+          title: String(r.title).trim(),
+          description: String(r.description ?? '').trim(),
+          price: Number(r.price),
+          count: Number(r.count),
+        }),
+      }));
+    }
+
+    const parsedKey = key.replace(/^uploaded\//, 'parsed/');
+    await s3.send(new CopyObjectCommand({ Bucket: BUCKET_NAME, CopySource: `${BUCKET_NAME}/${key}`, Key: parsedKey }));
     await s3.send(new DeleteObjectCommand({ Bucket: BUCKET_NAME, Key: key }));
-
-    console.log(`Moved ${key} → ${destKey}`);
+    console.info(`Moved ${key} → ${parsedKey}`);
   }
-
-  return { statusCode: 200, body: JSON.stringify({ ok: true }) };
 };
