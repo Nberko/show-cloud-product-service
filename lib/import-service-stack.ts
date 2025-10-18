@@ -7,6 +7,10 @@ import * as apigw from 'aws-cdk-lib/aws-apigateway';
 import * as s3n from 'aws-cdk-lib/aws-s3-notifications';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
 import * as path from 'path';
+import * as dotenv from 'dotenv';
+
+// Load environment variables from .env file
+dotenv.config();
 
 interface ImportProps extends cdk.StackProps {
   catalogQueue: sqs.IQueue;
@@ -22,6 +26,35 @@ export class ImportServiceStack extends cdk.Stack {
       removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
 
+    // Get credentials from environment variables
+    const credentials: { [key: string]: string } = {};
+
+    // Parse all environment variables to find credential pairs
+    Object.keys(process.env).forEach((key) => {
+      const value = process.env[key];
+      // Check if the value matches TEST_PASSWORD pattern and key doesn't start with common env prefixes
+      if (value === 'TEST_PASSWORD' && !key.startsWith('AWS_') && !key.startsWith('CDK_')) {
+        credentials[key] = value;
+      }
+    });
+
+    // If no credentials found, use a default one (should be set in .env)
+    if (Object.keys(credentials).length === 0) {
+      console.warn('No credentials found in environment variables. Please set them in .env file.');
+    }
+
+    // Create the Basic Authorizer Lambda
+    const basicAuthorizerFn = new NodejsFunction(this, 'BasicAuthorizerFn', {
+      runtime: lambda.Runtime.NODEJS_20_X,
+      entry: path.join(__dirname, '../src/handlers/basicAuthorizer.ts'),
+      handler: 'handler',
+      timeout: cdk.Duration.seconds(10),
+      environment: credentials,
+      bundling: {
+        externalModules: ['@aws-sdk/*'],
+      },
+    });
+
     const importProductsFile = new NodejsFunction(this, 'ImportProductsFileFn', {
       runtime: lambda.Runtime.NODEJS_20_X,
       entry: path.join(__dirname, '../src/handlers/import-products-file.ts'),
@@ -34,12 +67,27 @@ export class ImportServiceStack extends cdk.Stack {
     });
     bucket.grantPut(importProductsFile);
 
+    // Create the authorizer
+    const authorizer = new apigw.TokenAuthorizer(this, 'BasicAuthorizer', {
+      handler: basicAuthorizerFn,
+      identitySource: 'method.request.header.Authorization',
+      resultsCacheTtl: cdk.Duration.seconds(0), // Disable caching for testing
+    });
+
     const api = new apigw.RestApi(this, 'ImportApi', {
       restApiName: 'Import Service',
-      defaultCorsPreflightOptions: { allowOrigins: apigw.Cors.ALL_ORIGINS, allowMethods: ['GET','OPTIONS'] },
+      defaultCorsPreflightOptions: {
+        allowOrigins: apigw.Cors.ALL_ORIGINS,
+        allowMethods: ['GET','OPTIONS'],
+        allowHeaders: ['Content-Type', 'Authorization'],
+      },
       deployOptions: { stageName: 'prod' },
     });
-    api.root.addResource('import').addMethod('GET', new apigw.LambdaIntegration(importProductsFile));
+
+    api.root.addResource('import').addMethod('GET', new apigw.LambdaIntegration(importProductsFile), {
+      authorizer,
+      authorizationType: apigw.AuthorizationType.CUSTOM,
+    });
 
     const importFileParser = new NodejsFunction(this, 'ImportFileParserFn', {
       runtime: lambda.Runtime.NODEJS_20_X,
